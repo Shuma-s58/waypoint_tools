@@ -179,6 +179,17 @@ ros2 launch waypoint_tools waypoint_send.launch.py \
   send_waypoint_yaml_path:=/path/to/send_waypoints.yaml
 ```
 
+送信する waypoint FOLDER を指定する場合:  
+フォルダ内のyamlファイルを名前順に指定できる
+```bash
+ros2 launch waypoint_tools waypoint_send.launch.py \
+  send_waypoint_yaml_path:=/path/to/directory/
+```
+次のyamlファイルに進めるサービスコマンド:
+```bash
+ros2 service call /waypoint_editor_node/next_file std_srvs/srv/Trigger {}
+```
+
 action 名を指定する場合:
 
 ```bash
