@@ -94,3 +94,216 @@ void WaypointEditMarkers::show()
 void WaypointEditMarkers::addTaskEntries()
 {
   if (!options_.file) {return;}
+  const YAML::Node services = options_.file->root["arrival_services"];
+  if (!services || !services.IsMap()) {return;}
+  for (const auto & entry : services) {
+    const auto task = entry.first.as<std::string>();
+    const auto found = std::find_if(task_handles_.begin(), task_handles_.end(),
+      [&task](const auto & item) {return item.first == task;});
+    if (found != task_handles_.end()) {continue;}
+    const auto handle = menu_handler_.insert(
+      task_menu_handle_, task,
+      [this, task](const auto & feedback) {taskCallback(feedback, task);});
+    task_handles_.emplace_back(task, handle);
+  }
+}
+
+void WaypointEditMarkers::hide()
+{
+  // 消した後に、待っていた作り直しで marker が復活しないようにする。
+  deferred_.clear();
+  defer_timer_->cancel();
+  server_->clear();
+  server_->applyChanges();
+}
+
+void WaypointEditMarkers::update(size_t index)
+{
+  if (index >= waypoints_.size()) {
+    return;
+  }
+  makeMarker(index);
+  server_->applyChanges();
+}
+
+WaypointEditMarkers::EntryHandle WaypointEditMarkers::addCheckEntry(
+  const std::string & title, bool checked, std::function<void()> callback)
+{
+  const auto handle = menu_handler_.insert(
+    title, [callback = std::move(callback)](const auto &) {callback();});
+  menu_handler_.setCheckState(handle, checked ? MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+  return handle;
+}
+
+void WaypointEditMarkers::setChecked(EntryHandle handle, bool checked)
+{
+  menu_handler_.setCheckState(handle, checked ? MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+  defer(
+    [this]() {
+      menu_handler_.reApply(*server_);
+      server_->applyChanges();
+    });
+}
+
+void WaypointEditMarkers::makeMarker(size_t index)
+{
+  const Waypoint & waypoint = waypoints_[index];
+  const auto pose = get_pose(waypoint);
+  const bool stop = options_.stop_entry && is_stop(waypoint);
+  const auto task = options_.file ? on_arrival_task(waypoint) : "";
+  const auto action = on_arrival_action(waypoint);
+  const auto task_label = task.empty() ? "" : " [" + task + ":" + action + "]";
+  const auto marker = build_waypoint_marker(
+    std::to_string(index), frame_id_, pose.x, pose.y, pose.yaw, marker_scale(waypoint),
+    "waypoint " + std::to_string(index) + (stop ? " (stop)" : "") + task_label,
+    stop ? kStopDiscColor : kDiscColor);
+  server_->insert(marker);
+  server_->setCallback(
+    marker.name, [this](const auto & feedback) {poseUpdateCallback(feedback);},
+    Feedback::POSE_UPDATE);
+  if (options_.stop_entry) {
+    // MenuHandler のチェック状態は apply 時点の値が marker に焼き込まれる。
+    menu_handler_.setCheckState(
+      stop_handle_, stop ? MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+  }
+  if (options_.file) {
+    menu_handler_.setCheckState(
+      no_task_handle_, task.empty() ? MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+    for (const auto & item : task_handles_) {
+      menu_handler_.setCheckState(
+        item.second, item.first == task ? MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+    }
+    menu_handler_.setCheckState(
+      start_handle_, !task.empty() && action == "start" ?
+      MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+    menu_handler_.setCheckState(
+      stop_action_handle_, !task.empty() && action == "stop" ?
+      MenuHandler::CHECKED : MenuHandler::UNCHECKED);
+  }
+  menu_handler_.apply(*server_, marker.name);
+}
+
+bool WaypointEditMarkers::markerIndex(const Feedback & feedback, size_t & index) const
+{
+  try {
+    index = std::stoul(feedback.marker_name);
+  } catch (const std::exception &) {
+    return false;
+  }
+  return index < waypoints_.size();
+}
+
+void WaypointEditMarkers::defer(std::function<void()> task)
+{
+  deferred_.push_back(std::move(task));
+  defer_timer_->reset();
+}
+
+void WaypointEditMarkers::poseUpdateCallback(const Feedback::ConstSharedPtr & feedback)
+{
+  size_t index;
+  if (!markerIndex(*feedback, index)) {
+    return;
+  }
+  auto pose = feedback->pose;
+  const double old_z = get_pose(waypoints_[index]).z;
+  set_pose(
+    waypoints_[index], {pose.position.x, pose.position.y, old_z, quaternion_to_yaw(pose.orientation)});
+  pose.position.z = 0.0;
+  server_->setPose(feedback->marker_name, pose);
+  server_->applyChanges();
+  call(callbacks_.on_move, index);
+  call(callbacks_.on_change);
+}
+
+void WaypointEditMarkers::stopCallback(const Feedback::ConstSharedPtr & feedback)
+{
+  size_t index;
+  if (!markerIndex(*feedback, index)) {
+    return;
+  }
+  Waypoint & waypoint = waypoints_[index];
+  set_stop(waypoint, !is_stop(waypoint));
+  defer([this, index]() {update(index);});
+  RCLCPP_INFO(
+    logger_, "waypoint %zu: stop=%s (save to keep)", index,
+    is_stop(waypoint) ? "true" : "false");
+  call(callbacks_.on_change);
+}
+
+void WaypointEditMarkers::taskCallback(
+  const Feedback::ConstSharedPtr & feedback, const std::string & task)
+{
+  size_t index;
+  if (!markerIndex(*feedback, index)) {return;}
+  auto & node = waypoints_[index].yaml();
+  const auto previous_task = on_arrival_task(waypoints_[index]);
+  if (task.empty()) {
+    node.remove("on_arrival_task");
+    node.remove("on_arrival_action");
+    node.remove("on_arrival_service");
+  } else {
+    node["on_arrival_task"] = task;
+    node.remove("on_arrival_service");
+    if (previous_task != task || !node["on_arrival_action"]) {
+      node["on_arrival_action"] = "start";
+    }
+  }
+  defer([this, index]() {update(index);});
+  RCLCPP_INFO(logger_, "waypoint %zu: task=%s (save to keep)", index,
+    task.empty() ? "none" : task.c_str());
+  call(callbacks_.on_change);
+}
+
+void WaypointEditMarkers::actionCallback(
+  const Feedback::ConstSharedPtr & feedback, const std::string & action)
+{
+  size_t index;
+  if (!markerIndex(*feedback, index)) {return;}
+  if (on_arrival_task(waypoints_[index]).empty()) {
+    RCLCPP_WARN(logger_, "Select a task for waypoint %zu before setting its action.", index);
+    return;
+  }
+  waypoints_[index].yaml()["on_arrival_action"] = action;
+  defer([this, index]() {update(index);});
+  RCLCPP_INFO(logger_, "waypoint %zu: action=%s (save to keep)", index, action.c_str());
+  call(callbacks_.on_change);
+}
+
+void WaypointEditMarkers::insertCallback(const Feedback::ConstSharedPtr & feedback)
+{
+  size_t index;
+  if (!markerIndex(*feedback, index)) {
+    return;
+  }
+  auto pose = get_pose(waypoints_[index]);
+  Waypoint new_waypoint = waypoints_[index].clone();
+  set_stop(new_waypoint, false);
+  new_waypoint.yaml().remove("on_arrival_service");
+  new_waypoint.yaml().remove("on_arrival_task");
+  new_waypoint.yaml().remove("on_arrival_action");
+  pose.x += 0.5;
+  set_pose(new_waypoint, pose);
+  waypoints_.insert(waypoints_.begin() + static_cast<std::ptrdiff_t>(index) + 1, new_waypoint);
+  call(callbacks_.on_insert, index + 1);
+  defer([this]() {show();});
+  call(callbacks_.on_change);
+}
+
+void WaypointEditMarkers::deleteCallback(const Feedback::ConstSharedPtr & feedback)
+{
+  size_t index;
+  if (!markerIndex(*feedback, index)) {
+    return;
+  }
+  if (options_.keep_last && waypoints_.size() <= 1) {
+    RCLCPP_WARN(logger_, "Cannot delete the last waypoint.");
+    return;
+  }
+  waypoints_.erase(waypoints_.begin() + static_cast<std::ptrdiff_t>(index));
+  call(callbacks_.on_delete, index);
+  defer([this]() {show();});
+  call(callbacks_.on_change);
+}
+
+}  // namespace waypoint_tools

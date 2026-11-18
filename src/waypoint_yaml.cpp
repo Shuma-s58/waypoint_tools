@@ -94,3 +94,116 @@ void save_waypoint_file(const std::string & path, const WaypointFile & file)
   root["waypoints"] = waypoints;
 
   YAML::Emitter emitter;
+    emitter << root;
+  std::ofstream out(expand_user(path));
+  if (!out) {
+    throw std::runtime_error("Cannot write: " + path);
+  }
+  out << emitter.c_str() << '\n';
+}
+
+WaypointPose get_pose(const Waypoint & waypoint)
+{
+  return {
+    get_double(waypoint, "x"), get_double(waypoint, "y"),
+    get_double(waypoint, "z"), get_double(waypoint, "yaw")};
+}
+
+void set_pose(Waypoint & waypoint, const WaypointPose & pose)
+{
+  YAML::Node & node = waypoint.yaml();
+  node["x"] = format_double(pose.x);
+  node["y"] = format_double(pose.y);
+  node["z"] = format_double(pose.z);
+  node["yaw"] = format_double(pose.yaw);
+}
+
+Waypoint make_waypoint(const WaypointPose & pose)
+{
+  Waypoint waypoint;
+  set_pose(waypoint, pose);
+  return waypoint;
+}
+
+bool is_stop(const Waypoint & waypoint)
+{
+  const YAML::Node stop = waypoint.yaml()["stop"];
+  return stop && stop.IsScalar() && stop.as<bool>(false);
+}
+
+void set_stop(Waypoint & waypoint, bool stop)
+{
+  if (stop) {
+    waypoint.yaml()["stop"] = true;
+  } else {
+    waypoint.yaml().remove("stop");
+  }
+}
+
+std::string on_arrival_service(const Waypoint & waypoint)
+{
+  const YAML::Node value = waypoint.yaml()["on_arrival_service"];
+  return value ? value.as<std::string>() : "";
+}
+
+std::string on_arrival_task(const Waypoint & waypoint)
+{
+  const YAML::Node value = waypoint.yaml()["on_arrival_task"];
+  return value ? value.as<std::string>() : "";
+}
+
+std::string on_arrival_action(const Waypoint & waypoint)
+{
+  const YAML::Node value = waypoint.yaml()["on_arrival_action"];
+  return value ? value.as<std::string>() : "start";
+}
+
+std::string resolve_arrival_service(const WaypointFile & file, const Waypoint & waypoint)
+{
+  const auto task = on_arrival_task(waypoint);
+  const auto direct_service = on_arrival_service(waypoint);
+  const auto action = on_arrival_action(waypoint);
+  if (action != "start" && action != "stop") {
+    throw std::runtime_error("on_arrival_action must be start or stop: " + action);
+  }
+  if (task.empty()) {
+    if (action == "stop") {
+      throw std::runtime_error("on_arrival_action: stop requires on_arrival_task.");
+    }
+    return direct_service;
+  }
+  if (!direct_service.empty()) {
+    throw std::runtime_error("Use either on_arrival_task or on_arrival_service, not both.");
+  }
+  const YAML::Node services = file.root["arrival_services"];
+  const YAML::Node entry = services && services.IsMap() ? services[task] : YAML::Node();
+  // 単一名は SetBool、旧形式の start/stop マップは Trigger。
+  const YAML::Node name = entry && entry.IsMap() ? entry[action] : entry;
+  if (!name || !name.IsScalar() || name.as<std::string>().empty()) {
+    throw std::runtime_error("No arrival_services entry for task " + task + ", action " + action);
+  }
+  return name.as<std::string>();
+}
+
+bool is_arrival_control_service(const WaypointFile & file, const Waypoint & waypoint)
+{
+  const auto task = on_arrival_task(waypoint);
+  if (task.empty()) {
+    return false;  // on_arrival_service は従来どおり Trigger
+  }
+  const YAML::Node services = file.root["arrival_services"];
+  const YAML::Node entry = services && services.IsMap() ? services[task] : YAML::Node();
+  return entry && entry.IsScalar();
+}
+
+double goal_radius(const Waypoint & waypoint, double fallback)
+{
+  const YAML::Node properties = waypoint.yaml()["properties"];
+  if (!properties || !properties.IsMap()) {
+    return fallback;
+  }
+  const YAML::Node radius = properties["goal_radius"];
+  return radius ? radius.as<double>(fallback) : fallback;
+}
+
+}  // namespace waypoint_tools
