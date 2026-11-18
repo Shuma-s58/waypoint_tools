@@ -3,6 +3,7 @@
 
 #include <functional>
 #include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -22,7 +23,7 @@ constexpr char kServerNamespace[] = "waypoint_tools";
 //
 // コンストラクタで渡した waypoints を直接書き換える。
 // - 円盤をドラッグ: 位置移動 / 矢印をドラッグ: yaw 回転
-// - メニュー: insert after / delete / save / stop（+ addCheckEntry() で足した項目）
+// - メニュー: insert after / delete / save / stop / task / action
 class WaypointEditMarkers
 {
 public:
@@ -33,6 +34,7 @@ public:
   {
     bool stop_entry = true;  // メニューに stop（停止点の切り替え）を出す
     bool keep_last = true;   // 最後の 1 点は削除させない
+    WaypointFile * file = nullptr;  // task の候補を file.root["arrival_services"] から取得
   };
 
   // 呼び出し側への通知。on_insert / on_delete / on_move は変更した位置を、
@@ -74,6 +76,9 @@ private:
   void insertCallback(const Feedback::ConstSharedPtr & feedback);
   void deleteCallback(const Feedback::ConstSharedPtr & feedback);
   void stopCallback(const Feedback::ConstSharedPtr & feedback);
+  void taskCallback(const Feedback::ConstSharedPtr & feedback, const std::string & task);
+  void actionCallback(const Feedback::ConstSharedPtr & feedback, const std::string & action);
+  void addTaskEntries();
 
   rclcpp::Logger logger_;
   std::string frame_id_;
@@ -84,6 +89,11 @@ private:
   std::unique_ptr<interactive_markers::InteractiveMarkerServer> server_;
   interactive_markers::MenuHandler menu_handler_;
   EntryHandle stop_handle_ = 0;
+  EntryHandle task_menu_handle_ = 0;
+  EntryHandle no_task_handle_ = 0;
+  EntryHandle start_handle_ = 0;
+  EntryHandle stop_action_handle_ = 0;
+  std::vector<std::pair<std::string, EntryHandle>> task_handles_;
 
   rclcpp::TimerBase::SharedPtr defer_timer_;
   std::vector<std::function<void()>> deferred_;

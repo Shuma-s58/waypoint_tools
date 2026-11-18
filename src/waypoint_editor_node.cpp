@@ -37,11 +37,6 @@ public:
     file_ = load_waypoint_file(yaml_path_);
 
     routes_.emplace(*this, frame_id_, 0.04);
-    edit_markers_.emplace(
-      *this, frame_id_, file_.waypoints,
-      WaypointEditMarkers::Callbacks{
-        [this]() {saveWaypoints();}, nullptr, nullptr, nullptr,
-        [this]() {publishRoutes();}});
 
     save_service_ = create_service<Trigger>(
       "~/save", [this](
@@ -99,64 +94,3 @@ public:
   }
 
 private:
-  static std::string checkFile(const std::string & path)
-  {
-    if (!std::filesystem::is_regular_file(path)) {
-      throw std::runtime_error("yaml_path must be a file: " + path);
-    }
-    return path;
-  }
-
-  void loadFile(const std::string & path)
-  {
-    auto file = load_waypoint_file(path);
-    yaml_path_ = path;
-    file_ = std::move(file);
-    rebuildMarkers();
-    RCLCPP_INFO(get_logger(), "Loaded: %s", yaml_path_.c_str());
-  }
-
-  void rebuildMarkers()
-  {
-    edit_markers_->show();
-    publishRoutes();
-  }
-
-  void saveWaypoints()
-  {
-    save_waypoint_file(yaml_path_, file_);
-    RCLCPP_INFO(get_logger(), "Saved waypoints: %s", yaml_path_.c_str());
-  }
-
-  void publishRoutes()
-  {
-    routes_->publish(file_.waypoints);
-  }
-
-  std::string frame_id_;
-  std::string yaml_path_;
-  WaypointFile file_;
-
-  std::optional<RouteMarkers> routes_;
-  std::optional<WaypointEditMarkers> edit_markers_;
-  rclcpp::Service<Trigger>::SharedPtr save_service_;
-  rclcpp::Service<Trigger>::SharedPtr reload_service_;
-  OnSetParametersCallbackHandle::SharedPtr param_callback_;
-  rclcpp::TimerBase::SharedPtr timer_;
-};
-
-}  // namespace waypoint_tools
-
-int main(int argc, char ** argv)
-{
-  rclcpp::init(argc, argv);
-  int code = 0;
-  try {
-    rclcpp::spin(std::make_shared<waypoint_tools::WaypointEditorNode>());
-  } catch (const std::exception & e) {
-    RCLCPP_FATAL(rclcpp::get_logger("waypoint_editor_node"), "%s", e.what());
-    code = 1;
-  }
-  rclcpp::shutdown();
-  return code;
-}

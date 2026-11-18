@@ -63,6 +63,18 @@ Waypoint make_waypoint(const WaypointPose & pose);
 bool is_stop(const Waypoint & waypoint);
 void set_stop(Waypoint & waypoint, bool stop);
 
+// 到着時に呼ぶ std_srvs/srv/Trigger のサービス名。未設定なら空文字列。
+std::string on_arrival_service(const Waypoint & waypoint);
+
+// YAML の arrival_services に登録した A/B/C/D 等の識別子。
+std::string on_arrival_task(const Waypoint & waypoint);
+// start（既定）または stop。
+std::string on_arrival_action(const Waypoint & waypoint);
+// 識別子からサービス名を解決する。従来の on_arrival_service も使用可能。
+std::string resolve_arrival_service(const WaypointFile & file, const Waypoint & waypoint);
+// arrival_services の単一名は SetBool 制御サービス。旧形式の start/stop マップは Trigger。
+bool is_arrival_control_service(const WaypointFile & file, const Waypoint & waypoint);
+
 // properties.goal_radius（無ければ fallback）。
 double goal_radius(const Waypoint & waypoint, double fallback);
 

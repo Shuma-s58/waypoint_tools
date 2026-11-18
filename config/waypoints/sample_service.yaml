@@ -1,0 +1,35 @@
+arrival_services:
+  A: /mission/control_A
+  B: /mission/control_B
+  C: /mission/control_C
+  D: /mission/control_D
+waypoints:
+  - x: 1.0
+    y: 0.0
+    yaw: 0.0
+  - x: 2.0
+    y: 1.0
+    yaw: 1.57
+    on_arrival_task: A
+    on_arrival_action: start
+  - x: 3.0
+    y: 1.0
+    yaw: 0.0
+    on_arrival_task: B
+    on_arrival_action: start
+  - x: 4.0
+    y: 1.0
+    yaw: 0.0
+    on_arrival_task: C
+    on_arrival_action: start
+  - x: 5.0
+    y: 1.0
+    yaw: 0.0
+    on_arrival_task: D
+    on_arrival_action: start
+  - x: 6.0
+    y: 1.0
+    yaw: 0.0
+    on_arrival_task: A
+    on_arrival_action: stop
+
